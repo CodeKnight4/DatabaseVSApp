@@ -3,6 +3,7 @@ using Azure.Core;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using Microsoft.Data.SqlClient;
+using Microsoft.IdentityModel.Tokens;
 using System.Data;
 using System.Globalization;
 using System.IO;
@@ -69,7 +70,20 @@ public class Program
         {
             Console.Write($"Please enter {col}: ");
             res = Console.ReadLine();
-        } while (col.Length < 2 && col.Length > 50);
+        } while (col.Length < 2 || col.Length > 50);
+
+        TextInfo myTI = new CultureInfo("en-gb", false).TextInfo;
+        return myTI.ToTitleCase(res);
+    }
+
+    public static string ValidateCol(string col, int _)
+    {
+        string? res = "";
+        do
+        {
+            Console.Write($"Please enter a new {col}: ");
+            res = Console.ReadLine();
+        } while (col.Length < 2 || col.Length > 50);
 
         TextInfo myTI = new CultureInfo("en-gb", false).TextInfo;
         return myTI.ToTitleCase(res);
@@ -83,9 +97,22 @@ public class Program
         {
             Console.Write($"Please enter {col}: ");
             res = Console.ReadLine();
-        } while (!DateTime.TryParse(res, out dateVal));
+        } while (!DateTime.TryParse(res, out dateVal) || dateVal.Year < 1900);
 
-        return dateVal.ToString();
+        return dateVal.Date.ToString();
+    }
+
+    public static string ValidateDate(string col, int _)
+    {
+        string? res = "";
+        DateTime dateVal;
+        do
+        {
+            Console.Write($"Please enter a new {col}: ");
+            res = Console.ReadLine();
+        } while (!DateTime.TryParse(res, out dateVal) || dateVal.Year < 1900);
+
+        return dateVal.Date.ToString();
     }
 
     public static string ValidateYear(string col)
@@ -127,8 +154,9 @@ public class Program
         return rating.ToString();
     }
 
-    private static string[] GetUpdateInfo(string table)
+    private static string[] GetColumnsToUpdate(string table)
     {
+        Console.Clear();
         string[] actorColumnList = ["First_Name", "Last_Name", "Date_Of_Birth", "Country_Of_Birth"];
         string[] movieColumnList = ["Title", "Description", "Release_Year", "Running_Length_Mins", "IMDb_Rating", "Reviews", "Director"];
         string chosenString = "";
@@ -166,10 +194,10 @@ public class Program
             Console.WriteLine("Only the Actor and Movie tables are supported for dynamic SQL queries at the moment.");
         }
 
-        return chosenString.Split(new string[] { "\n" },StringSplitOptions.RemoveEmptyEntries);
+        return chosenString.Split(new string[] { "\n" }, StringSplitOptions.RemoveEmptyEntries);
     }
 
-    public static string GetDeleteInfo(string table)
+    public static string GetRecordInfo(string table)
     {
         string colName;
         if (table == "Actor")
@@ -239,7 +267,6 @@ public class Program
     {
         string? table = GetTable();
         Console.Clear();
-        // Console.WriteLine("Due to limited functionality only one column will be displayed.\n");
         string? res = "";
         string sql = "";
         string[] values;
@@ -251,7 +278,7 @@ public class Program
             cmd = new SqlCommand(sql, c);  // Creating a command object
             cmd.Parameters.AddWithValue("@First_Name", values[0]);
             cmd.Parameters.AddWithValue("@Last_Name", values[1]);
-            cmd.Parameters.AddWithValue("@Date_Of_Birth", values[2]);
+            cmd.Parameters.AddWithValue("@Date_Of_Birth", DateTime.Parse(values[2]));
             cmd.Parameters.AddWithValue("@Country_Of_Birth", values[3]);
         }
         else if (table == "Movie")
@@ -261,9 +288,9 @@ public class Program
             cmd = new SqlCommand(sql, c);  // Creating a command object
             cmd.Parameters.AddWithValue("@Title", values[0]);
             cmd.Parameters.AddWithValue("@Description", values[1]);
-            cmd.Parameters.AddWithValue("@Release_Year", values[2]);
-            cmd.Parameters.AddWithValue("@Running_Length_Mins", values[3]);
-            cmd.Parameters.AddWithValue("@IMDb_Rating", values[4]);
+            cmd.Parameters.AddWithValue("@Release_Year", Int16.Parse(values[2]));
+            cmd.Parameters.AddWithValue("@Running_Length_Mins", Int16.Parse(values[3]));
+            cmd.Parameters.AddWithValue("@IMDb_Rating", Decimal.Parse(values[4]));
             cmd.Parameters.AddWithValue("@Reviews", values[5]);
             cmd.Parameters.AddWithValue("@Director", values[6]);
         }
@@ -277,7 +304,7 @@ public class Program
         c.Open();
         var reader = cmd.ExecuteNonQuery();  // Executes INSERT/UPDATE/DELETE command
 
-        Console.WriteLine($"Added new record to {table.ToLower()}.\n");
+        Console.WriteLine($"\nAdded new record to {table.ToLower()}.");
 
         c.Close();
         do
@@ -337,51 +364,107 @@ public class Program
     {
         string? table = GetTable();
         Console.Clear();
-        Console.WriteLine("Due to limited functionality only one column can be used to update a record.\n");
+        Console.WriteLine("Due to limited functionality only the first column (First_Name/Title) can be used to update a record.\n");
         string? res;
         string sql;
-        string getName = GetDeleteInfo(table);
-        string[] values = GetUpdateInfo(table);
-        Console.WriteLine(values.Length);
-        foreach (var v in values)
-        {
-            Console.WriteLine(v);
-        }
+        string sqlCols = "";
+        string getName = GetRecordInfo(table);
+        string[] values = GetColumnsToUpdate(table)[0].Trim().Split(" ");
+        string[] updatedValues = GetUpdatedValues(values);
+
         var cmd = new SqlCommand();
-        //if (table == "Actor")
-        //{
-        //    sql = $"UPDATE {table} SET {values} WHERE First_Name = (@First_Name)";
-        //    cmd = new SqlCommand(sql, c);  // Creating a command object
+        if (table == "Actor")
+        {
+            if (values.Length > 1)
+            {
+                foreach (var v in values)
+                {
+                    sqlCols += $" {v} = @{v},";
+                }
 
-        //    cmd.Parameters.AddWithValue("@First_Name", getName);
-        //}
-        //else if (table == "Movie")
-        //{
-        //    sql = $"UPDATE {table} SET WHERE Title = (@Title)";
-        //    cmd = new SqlCommand(sql, c);  // Creating a command object
+                sql = $"UPDATE {table} SET{sqlCols.Remove(sqlCols.Length-1)} WHERE First_Name = @OldFirst_Name";
+                // Console.WriteLine(sql);
+                cmd = new SqlCommand(sql, c);
+                for (int i = 0; i < values.Length; i++)
+                {
+                    if (values[i] == "Date_Of_Birth")
+                    {
+                        cmd.Parameters.AddWithValue($"@{values[i]}", DateTime.Parse(updatedValues[i]));
+                    }
+                    else
+                    {
+                        cmd.Parameters.AddWithValue($"@{values[i]}", updatedValues[i]);
+                    }
+                }
+                cmd.Parameters.AddWithValue($"@OldFirst_Name", getName);
+            }
 
-        //    cmd.Parameters.AddWithValue("@Title", getName);
-        //}
-        //else
-        //{
-        //    Console.WriteLine("Only the Actor and Movie tables are supported at this point in time.");
-        //    Thread.Sleep(2000);
-        //    CrudMenu();
-        //}
+            else
+            {
+                sql = $"UPDATE {table} SET {values[0]} = @{values[0]} WHERE First_Name = @OldFirst_Name";
+                cmd = new SqlCommand(sql, c);  
+                cmd.Parameters.AddWithValue($"@{values[0]}", updatedValues[0]);
+                cmd.Parameters.AddWithValue($"@OldFirst_Name", getName);
+            }
+        }
+        else if (table == "Movie")
+        {
+            if (values.Length > 1)
+            {
+                foreach (var v in values)
+                {
+                    sqlCols += $" {v} = @{v},";
+                }
 
-        //c.Open();
-        //var reader = cmd.ExecuteNonQuery();  // Executes INSERT/UPDATE/DELETE command
+                sql = $"UPDATE {table} SET{sqlCols.Remove(sqlCols.Length - 1)} WHERE Title = @OldTitle";
+                Console.WriteLine(sql);
+                cmd = new SqlCommand(sql, c);
+                for (int i = 0; i < values.Length; i++)
+                {
+                    if (values[i] == "Release_Year" || values[i] == "Running_Length_Mins")
+                    {
+                        cmd.Parameters.AddWithValue($"@{values[i]}", Int16.Parse(updatedValues[i]));
+                    }
+                    else if (values[i] == "IMDb_Rating") 
+                    {
+                        cmd.Parameters.AddWithValue($"@{values[i]}", Decimal.Parse(updatedValues[i]));
+                    }
+                    else
+                    {
+                        cmd.Parameters.AddWithValue($"@{values[i]}", updatedValues[i]);
+                    }
+                }
+                cmd.Parameters.AddWithValue($"@OldTitle", getName);
+            }
 
-        //if (reader == 1)
-        //{
-        //    Console.WriteLine($"Updated record in {table.ToLower()}.\n");
-        //}
-        //else
-        //{
-        //    Console.WriteLine($"No record found, {table.ToLower()} unchanged.\n");
-        //}
+            else
+            {
+                sql = $"UPDATE {table} SET {values[0]} = @{values[0]} WHERE Title = @OldTitle";
+                cmd = new SqlCommand(sql, c);
+                cmd.Parameters.AddWithValue($"@{values[0]}", updatedValues[0]);
+                cmd.Parameters.AddWithValue($"@OldTitle", getName);
+            }
+        }
+        else
+        {
+            Console.WriteLine("Only the Actor and Movie tables are supported at this point in time.");
+            Thread.Sleep(2000);
+            CrudMenu();
+        }
 
-        //c.Close();
+        c.Open();
+        var reader = cmd.ExecuteNonQuery();  // Executes INSERT/UPDATE/DELETE command
+
+        if (reader == 1)
+        {
+            Console.WriteLine($"\nUpdated record in {table.ToLower()}.");
+        }
+        else
+        {
+            Console.WriteLine($"No record found, {table.ToLower()} unchanged.\n");
+        }
+
+        c.Close();
         do
         {
             Console.Write("\nPress 1 to return to the CRUD menu or 2 to exit: ");
@@ -399,6 +482,22 @@ public class Program
         }
     }
 
+    private static string[] GetUpdatedValues(string[] values)
+    {
+        Console.Clear();
+        string[] updatedValues = new string[values.Length];
+        string? res = "";
+
+        for(int i = 0; i < values.Length; i++)
+        {
+            Console.Write($"Please enter a new {values[i]}: ");
+            res = Console.ReadLine();
+            updatedValues[i] = res;
+        }
+
+        return updatedValues;
+    }
+
     public static void DeleteMethod(SqlConnection c)
     {
         string? table = GetTable();
@@ -406,7 +505,7 @@ public class Program
         Console.WriteLine("Due to limited functionality only one column can be used to delete a record.\n");
         string? res = "";
         string sql = "";
-        string getName = GetDeleteInfo(table);
+        string getName = GetRecordInfo(table);
         var cmd = new SqlCommand();
         if (table == "Actor")
         {
@@ -434,7 +533,7 @@ public class Program
 
         if (reader == 1)
         {
-            Console.WriteLine($"Deleted record in {table.ToLower()}.\n");
+            Console.WriteLine($"\nDeleted record in {table.ToLower()}.");
         }
         else
         {
@@ -493,8 +592,6 @@ public class Program
             Console.WriteLine("Show list of tables");
             using SqlConnection conn = InitApp();
             ShowTables(conn);
-
-
         }
         else
         {
@@ -533,32 +630,31 @@ public class Program
             response = Console.ReadLine();
         } while ((response != "1") && (response != "2") && (response != "3") && (response != "4") && (response != "5") && (response != "6"));
 
+        LoadingMessage();
+
         switch (response)
+
         {
             case "1":
                 {
-                    Console.WriteLine("Creating...");
                     using SqlConnection conn = InitApp();
                     CreateMethod(conn);
                     break;
                 }
             case "2":
                 {
-                    Console.WriteLine("Reading...");
                     using SqlConnection conn = InitApp();
                     ReadMethod(conn);
                     break;
                 }
             case "3":
                 {
-                    Console.WriteLine("Updating...");
                     using SqlConnection conn = InitApp();
                     UpdateMethod(conn);
                     break;
                 }
             case "4":
                 {
-                    Console.WriteLine("Deleting...");
                     using SqlConnection conn = InitApp();
                     DeleteMethod(conn);
                     break;
@@ -575,7 +671,6 @@ public class Program
                 }
         }
     }
-
 
     public static void ShowTables(SqlConnection c)
     {
@@ -623,23 +718,13 @@ public class Program
         };
         string connectionString = builder.ConnectionString;
 
-        // conn.Open();
-
         return new SqlConnection(connectionString);
     }
 
-    public static SqlConnection InitAppNoStringBuilder()
+    public static void LoadingMessage()
     {
-        string server = "127.0.0.1,1433";
-        string database = "MoviesAndActors";
-        string username = "SA";
-        string pwd = Environment.GetEnvironmentVariable("mssql_pass").ToString();
-
-        return new SqlConnection(
-            $"Server = {server};" +
-            $"TrustServerCertificate = True;" +
-            $"Database = {database};" +
-            $"User Id = {username};" +
-            $"Password = {pwd};");
+        Console.Clear();
+        Console.WriteLine("Loading...");
+        Thread.Sleep(1000);
     }
 }
